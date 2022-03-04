@@ -1,0 +1,19 @@
+[package]
+name = "rust_net_auth"
+version = "0.1.0"
+edition = "2021"
+
+[examples]
+name = "basic"
+path = "examples/basic.rs"
+
+[dependencies]
+ring = "0.16.20"
+serde = "1.0.133"
+rand = "0.8.4"
+rust_net = { git = "https://github.com/murielberehulka/rust_net" }
+
+[dependencies.mongodb]
+version = "2.1.0"
+default-features = false
+features = ["sync"]
