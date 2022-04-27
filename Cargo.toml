@@ -11,7 +11,7 @@ path = "examples/basic.rs"
 ring = "0.16.20"
 serde = "1.0.133"
 rand = "0.8.4"
-rust_net = { git = "https://github.com/murielberehulka/rust_net" }
+rust_net = { git = "https://github.com/murielberehulka/rust-net" }
 
 [dependencies.mongodb]
 version = "2.1.0"
