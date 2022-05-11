@@ -70,19 +70,33 @@ Login and get token
     - 500: server internal error message
 </details>
 
+
+<details>
+<summary>client/user</summary>
+Get user info
+
+- Request: "user_token"<br>
+- Return:
+    - 200: name|prof_pic|has_password|privilege
+    - 400:
+        - "User not found"
+    - 500: server internal error message
+</details>
+
 <details>
 <summary>client/users</summary>
 Get client users list
 
 - Request: client token
 - Return:
-    - 200: "u1_name|u1_prof_pic|u1_has_password#u2_name|u2_prof_pic..."<br>
+    - 200: "u1_name|u1_prof_pic|u1_has_password|u1_privilege#u2_name|u2_prof_pic..."<br>
         users are splited by: '#'<br>
         user properties are splited by: '|'<br>
         properties:<br>
             - name<br>
             - profile picture url<br>
             - if user has password ("true" or "false")
+            - privilege (admin level)
     - 400:
         - "Bad request format"
         - "Client not found": means that wrong token was given
@@ -93,6 +107,7 @@ Get client users list
 <summary>client/users/new</summary>
 Create new user in client
 
+- If there is no other user with the highest admin level, this will take it, otherwise will have 0 privilege
 - Request: "client_token|user_name|user_password"<br>
     leave user_password empty for no password<br>
     user_name must be longer than 5 and shorter than 40<br>
@@ -109,25 +124,9 @@ Create new user in client
     - 500: server internal error message
 </details>
 
-
-<details>
-<summary>client/users/remove</summary>
-Remove client user
-
-- Request: "client_token|user_name|user_password"<br>
-- Return:
-    - 200: "OK"
-    - 400:
-        - "Bad request format"
-        - "Client not found": means that wrong token was given
-        - "User not found": means that wrong user_name was given
-        - "Wrong password"
-    - 500: server internal error message
-</details>
-
 <details>
 <summary>client/users/login</summary>
-Login into client user and get user token
+Login into user and get user token
 
 - Request: "client_token|user_name|user_password"<br>
 - Return:

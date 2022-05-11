@@ -13,6 +13,12 @@ impl rust_net_auth::AuthContext for Context {
         //Random numbers for password encryptation before send to database
         &[165,89,92,232,18,17,5,162,33,142,37,44,20,186,82,71]
     }
+    fn admin_levels(&self) -> &'static [&'static str] {
+        &["normal", "admin", "owner"]
+    }
+    fn max_users(&self) -> usize {
+        100
+    }
 }
 
 fn main() {

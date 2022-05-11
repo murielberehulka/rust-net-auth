@@ -1,40 +1,21 @@
-use rust_net::{Response, Socket};
+use std::str;
+use rust_net::{Response, Socket, get_body_utf8};
 use mongodb::{bson::{doc, Bson}, sync::Collection};
 use serde::{Deserialize, Serialize};
-pub mod error;
 pub mod encryption;
 pub mod utils;
 pub mod token;
-use error::*;
 use encryption::*;
 use utils::*;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ClientUserBasicInfo {
-    token: String,
-    name: String,
-    prof_pic: String,
-    password: String
-}
-impl From<ClientUserBasicInfo> for Bson {
-    fn from(user: ClientUserBasicInfo) -> Self {
-        Self::from(doc! {
-            "token": user.token.clone(),
-            "name": user.name.clone(),
-            "prof_pic": user.prof_pic.clone(),
-            "password": user.password.clone()
-        })
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Client {
     token: String,
     email: String,
     password: Vec<Bson>,
-    users: Vec<ClientUserBasicInfo>
+    users: Vec<User>
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct User {
     token: String,
     privilege: u32,
@@ -42,35 +23,52 @@ pub struct User {
     prof_pic: String,
     password: String
 }
+impl From<User> for Bson {
+    fn from(user: User) -> Self {
+        Self::from(doc! {
+            "token": user.token.clone(),
+            "privilege": user.privilege.clone(),
+            "name": user.name.clone(),
+            "prof_pic": user.prof_pic.clone(),
+            "password": user.password.clone()
+        })
+    }
+}
 
 pub trait AuthContext {
     fn clients(&mut self) -> &mut Collection<Client>;
     fn users(&mut self) -> &mut Collection<User>;
     fn salts(&self) -> &Salts;
+    fn admin_levels(&self) -> &'static [&'static str] {
+        &["normal", "admin", "owner"]
+    }
+    fn max_users(&self) -> usize {
+        100
+    }
 }
 
 pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
-    server.add_post_route("client/exists/by/email", |context, socket, res| {
-        let email_bytes = res.get_body();
+    server.add_post_route("client/exists/by/email", |context, socket, req| {
+        let email_bytes = req.get_body();
         if !verify_email(socket, email_bytes) {return}
         let email = String::from_utf8_lossy(email_bytes).to_string();
         match context.clients().count_documents(doc!{ "email": &email }, count_opts()) {
             Ok(0) => return socket.send_400(b"Not found"),
             Ok(_) => return socket.send_200(b"Found"),
-            Err(e) => return on_error_500(socket, e)
+            Err(e) => return socket.send_500(e)
         }
     });
-    server.add_post_route("client/exists/by/token", |context, socket, res| {
-        let token = String::from_utf8_lossy(res.get_body()).to_string();
+    server.add_post_route("client/exists/by/token", |context, socket, req| {
+        let token = get_body_utf8!(req, socket);
         match context.clients().count_documents(doc!{ "token": &token }, count_opts()) {
             Ok(0) => return socket.send_400(b"Not found"),
             Ok(_) => return socket.send_200(b"Found"),
-            Err(e) => return on_error_500(socket, e)
+            Err(e) => return socket.send_500(e)
         }
     });
     
-    server.add_post_route("client/new", |context, socket, res| {
-        let data = res.get_body_formated();
+    server.add_post_route("client/new", |context, socket, req| {
+        let data = req.get_body_formated();
         if data.len() != 2 {
             return socket.send_400(b"Bad request format");
         }
@@ -83,7 +81,7 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
         match context.clients().count_documents(doc!{ "email": &email }, count_opts()) {
             Ok(0) => {},
             Ok(_) => return socket.send_400(b"E-mail is already in use"),
-            Err(e) => return on_error_500(socket, e)
+            Err(e) => return socket.send_500(e)
         }
         let password_encrypted = encrypt(context.salts(), email_bytes, password_bytes);
         let password_encrypted_bson_array = byte_array_to_bson(&password_encrypted);
@@ -95,12 +93,12 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
             users: vec![]
         }, None) {
             Ok (_) => return socket.send_200(token.as_bytes()),
-            Err(e) => return on_error_500(socket, e)
+            Err(e) => return socket.send_500(e)
         }
     });
     
-    server.add_post_route("client/login", |context, socket, res| {
-        let data = res.get_body_formated();
+    server.add_post_route("client/login", |context, socket, req| {
+        let data = req.get_body_formated();
         if data.len() != 2 {
             return socket.send_400(b"Bad request format");
         }
@@ -112,7 +110,7 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
                 Some(client) => client,
                 None => return socket.send_400(b"E-mail not found")
             },
-            Err(e) => return on_error_500(socket, e)
+            Err(e) => return socket.send_500(e)
         };
         let password_encrypted = bson_array_to_vec_u8(&client.password);
         if verify(context.salts(), email_bytes, password_bytes, &password_encrypted) {
@@ -122,29 +120,46 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
         }
     });
 
-    server.add_post_route("client/users", |context, socket, data| {
-        let token = String::from_utf8_lossy(data.get_body()).to_string();
+    server.add_post_route("client/user", |context, socket, req| {
+        match context.users().find_one(doc!{ "token": &get_body_utf8!(req, socket) }, None) {
+            Ok(res) => match res {
+                Some(user) =>
+                    socket.send_200(format!("{}|{}|{}|{}", 
+                        user.name,
+                        user.prof_pic,
+                        user.password.len() > 0,
+                        user.privilege
+                    ).to_string().as_bytes()),
+                None => return socket.send_400(b"User not found")
+            },
+            Err(e) => return socket.send_500(e)
+        }
+    });
+    
+    server.add_post_route("client/users", |context, socket, req| {
+        let token = get_body_utf8!(req, socket);
         let client = match context.clients().find_one(doc!{ "token": &token }, None) {
             Ok(client) => match client {
                 Some(client) => client,
                 None => return socket.send_400(b"Client not found")
             },
-            Err(e) => return on_error_500(socket, e)
+            Err(e) => return socket.send_500(e)
         };
         let mut users = vec![];
         for user in client.users {
-            users.push(format!("{}|{}|{}", 
+            users.push(format!("{}|{}|{}|{}", 
                 user.name,
                 user.prof_pic,
-                user.password.len() > 0
+                user.password.len() > 0,
+                user.privilege
             ).to_string())
         }
         let res = users.join("#");
         socket.send_200(res.as_bytes());
     });
     
-    server.add_post_route("client/users/new", |context, socket, data| {
-        let data = data.get_body_formated();
+    server.add_post_route("client/users/new", |context, socket, req| {
+        let data = req.get_body_formated();
         if data.len() != 3 {
             return socket.send_400(b"Bad request format");
         }
@@ -157,106 +172,53 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
         }
         let token = String::from_utf8_lossy(token_bytes).to_string();
         let name = String::from_utf8_lossy(name_bytes).to_string();
-        match context.clients().count_documents(doc!{
-            "token": token.clone()
-        }, count_opts()) {
-            Ok (0) => return socket.send_400(b"Client not found"),
-            Ok (_) => {},
-            Err(e) => return on_error_500(socket, e)
-        }
-        match context.clients().count_documents(doc!{
-            "token": token.clone(),
-            "users.name": name.clone()
-        }, None) {
-            Ok (res) => if res > 0 {
-                return socket.send_400(b"Name already in use");
+        let mut privilege = context.admin_levels().len() as u32 - 1;
+        match context.clients().find_one(doc!{ "token": &token }, None) {
+            Ok(client) => match client {
+                Some(client) => {
+                    if client.users.len() >= context.max_users() {
+                        return socket.send_400(format!("Can not create more than {} users", context.max_users()).to_string().as_bytes())
+                    }
+                    for user in client.users {
+                        if user.name == name {
+                            return socket.send_400(b"Name already in use")
+                        }
+                        if user.privilege == privilege {
+                            privilege = 0
+                        }
+                    }
+                },
+                None => return socket.send_400(b"Client not found")
             },
-            Err(e) => return on_error_500(socket, e)
+            Err(e) => return socket.send_500(e)
         }
-
         let password = String::from_utf8_lossy(password_bytes).to_string();
-
-        let user_token = token::new();
+        let user = User {
+            token: token::new(),
+            privilege,
+            name: name.clone(),
+            prof_pic: String::new(),
+            password: password.clone()
+        };
         match context.clients().update_one(
             doc!{ "token": &token },
             doc!{ "$push": { 
-                "users": ClientUserBasicInfo {
-                    token: token.clone(),
-                    name: name.clone(),
-                    prof_pic: String::new(),
-                    password: password.clone()
-                }
+                "users": &user
             } },
             None
         ) {
-            Ok (_) => 
-                match context.users().insert_one(User {
-                    token: user_token,
-                    privilege: 0,
-                    name,
-                    prof_pic: String::new(),
-                    password
-                },None) {
+            Ok (_) => {
+                match context.users().insert_one(&user, None) {
                     Ok (_) => return socket.send_200(b"OK"),
-                    Err(e) => return on_error_500(socket, e)
-                },
-            Err(e) => return on_error_500(socket, e)
-        }
-    });
-
-    server.add_post_route("client/users/remove", |context, socket, data| {
-        let data = data.get_body_formated();
-        if data.len() != 3 {
-            return socket.send_400(b"Bad request format");
-        }
-        let token_bytes = data[2];
-        let name_bytes = data[1];
-        let password_bytes = data[0];
-        let token = String::from_utf8_lossy(token_bytes).to_string();
-        let name = String::from_utf8_lossy(name_bytes).to_string();
-        let password = String::from_utf8_lossy(password_bytes).to_string();
-        let client = match context.clients().find_one(doc!{ "token": &token }, None) {
-            Ok(client) => match client {
-                Some(client) => client,
-                None => return socket.send_400(b"Client not found")
-            },
-            Err(e) => return on_error_500(socket, e)
-        };
-        let mut found = false;
-        for user in client.users {
-            if user.name == name {
-                if user.password != password {
-                    return socket.send_400(b"Wrong password")
-                }else {
-                    found = true;
+                    Err(e) => return socket.send_500(e)
                 }
-            }
-        }
-        if !found {
-            return socket.send_400(b"User not found")
-        }
-        match context.clients().update_one(
-            doc!{ "token": &token },
-            doc!{ "$pull": { 
-                "users": {
-                    "name": name.clone()
-                }
-            } },
-            None
-        ) {
-            Ok (_) => match context.users().find_one_and_delete(
-                doc!{ "name": name },
-                None
-            ) {
-                Ok (_) => return socket.send_200(b"OK"),
-                Err(e) => return on_error_500(socket, e)
             },
-            Err(e) => return on_error_500(socket, e)
+            Err(e) => return socket.send_500(e)
         }
     });
     
-    server.add_post_route("client/users/login", |context, socket, data| {
-        let data = data.get_body_formated();
+    server.add_post_route("client/users/login", |context, socket, req| {
+        let data = req.get_body_formated();
         if data.len() != 3 {
             return socket.send_400(b"Bad request format");
         }
@@ -282,7 +244,7 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
                 },
                 None => return socket.send_400(b"Client not found")
             },
-            Err(e) => return on_error_500(socket, e)
+            Err(e) => return socket.send_500(e)
         }
     });
 }
