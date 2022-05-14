@@ -208,11 +208,7 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
             None
         ) {
             Ok (_) => {
-                match context.users().insert_one(doc!{
-                        "token": &user.token,
-                        "privilege": privilege,
-                        "client_token": &token
-                    }, None) {
+                match context.users().insert_one(&user, None) {
                     Ok (_) => return socket.send_200(b"OK"),
                     Err(e) => return socket.send_500(e)
                 }
