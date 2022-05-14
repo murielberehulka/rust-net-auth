@@ -1,6 +1,6 @@
 use std::str;
 use rust_net::{Response, Socket, get_body_utf8};
-use mongodb::{bson::{doc, Bson}, sync::Collection};
+use mongodb::{bson::{oid::ObjectId, doc, Bson}, sync::Collection};
 use serde::{Deserialize, Serialize};
 pub mod encryption;
 pub mod utils;
@@ -10,6 +10,7 @@ use utils::*;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Client {
+    _id: ObjectId,
     token: String,
     email: String,
     password: Vec<Bson>,
@@ -17,6 +18,8 @@ pub struct Client {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct User {
+    _id: ObjectId,
+    client_id: ObjectId,
     token: String,
     privilege: u32,
     name: String,
@@ -26,6 +29,8 @@ pub struct User {
 impl From<User> for Bson {
     fn from(user: User) -> Self {
         Self::from(doc! {
+            "_id": user._id.clone(),
+            "client_id": user.client_id.clone(),
             "token": user.token.clone(),
             "privilege": user.privilege.clone(),
             "name": user.name.clone(),
@@ -87,6 +92,7 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
         let password_encrypted_bson_array = byte_array_to_bson(&password_encrypted);
         let token = token::new();
         match context.clients().insert_one(Client {
+            _id: ObjectId::new(),
             token: token.clone(),
             email,
             password: password_encrypted_bson_array,
@@ -173,6 +179,7 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
         let token = String::from_utf8_lossy(token_bytes).to_string();
         let name = String::from_utf8_lossy(name_bytes).to_string();
         let mut privilege = context.admin_levels().len() as u32 - 1;
+        let client_id;
         match context.clients().find_one(doc!{ "token": &token }, None) {
             Ok(client) => match client {
                 Some(client) => {
@@ -187,6 +194,7 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
                             privilege = 0
                         }
                     }
+                    client_id = client._id;
                 },
                 None => return socket.send_400(b"Client not found")
             },
@@ -194,6 +202,8 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
         }
         let password = String::from_utf8_lossy(password_bytes).to_string();
         let user = User {
+            _id: ObjectId::new(),
+            client_id,
             token: token::new(),
             privilege,
             name: name.clone(),
