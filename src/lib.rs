@@ -10,21 +10,21 @@ use utils::*;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Client {
-    _id: ObjectId,
-    token: String,
-    email: String,
-    password: Vec<Bson>,
-    users: Vec<User>
+    pub _id: ObjectId,
+    pub token: String,
+    pub email: String,
+    pub password: Vec<Bson>,
+    pub users: Vec<User>
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct User {
-    _id: ObjectId,
-    client_id: ObjectId,
-    token: String,
-    privilege: u32,
-    name: String,
-    prof_pic: String,
-    password: String
+    pub _id: ObjectId,
+    pub client_id: ObjectId,
+    pub token: String,
+    pub privilege: u32,
+    pub name: String,
+    pub prof_pic: String,
+    pub password: String
 }
 impl From<User> for Bson {
     fn from(user: User) -> Self {
@@ -49,6 +49,9 @@ pub trait AuthContext {
     }
     fn max_users(&self) -> usize {
         100
+    }
+    fn on_new_client(&mut self, client: Client, socket: &mut Socket) {
+        socket.send_200(client.token.as_bytes())
     }
 }
 
@@ -91,14 +94,15 @@ pub fn set_auth_routes(server: &mut rust_net::Server<impl AuthContext>) {
         let password_encrypted = encrypt(context.salts(), email_bytes, password_bytes);
         let password_encrypted_bson_array = byte_array_to_bson(&password_encrypted);
         let token = token::new();
-        match context.clients().insert_one(Client {
+        let client = Client {
             _id: ObjectId::new(),
             token: token.clone(),
             email,
             password: password_encrypted_bson_array,
             users: vec![]
-        }, None) {
-            Ok (_) => return socket.send_200(token.as_bytes()),
+        };
+        match context.clients().insert_one(&client, None) {
+            Ok (_) => return context.on_new_client(client, socket),
             Err(e) => return socket.send_500(e)
         }
     });
