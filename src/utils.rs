@@ -22,7 +22,7 @@ macro_rules! get_client_id {
     };
 }
 #[macro_export]
-macro_rules! get_client {
+macro_rules! get_user {
     ($context: expr, $socket: expr, $v: expr) => {
         match $context.users().find_one(doc!{ "token": $v }, None) {
             Ok(res) => match res {
