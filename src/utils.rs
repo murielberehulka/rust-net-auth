@@ -21,6 +21,18 @@ macro_rules! get_client_id {
         }
     };
 }
+#[macro_export]
+macro_rules! get_client {
+    ($context: expr, $socket: expr, $v: expr) => {
+        match $context.users().find_one(doc!{ "token": $v }, None) {
+            Ok(res) => match res {
+                Some(user) => user,
+                None => return $socket.send_400(b"User not found")
+            },
+            Err(e) => return $socket.send_500(e)
+        }
+    };
+}
 
 pub fn count_opts() -> Option<CountOptions> {
     Some(CountOptions::builder()
